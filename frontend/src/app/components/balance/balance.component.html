@@ -1,0 +1,46 @@
+<div class="balance-container">
+  <mat-toolbar color="primary">
+    <span>Claude Bank</span>
+    <span class="spacer"></span>
+    <button mat-icon-button (click)="logout()" aria-label="Cerrar sesión">
+      <mat-icon>exit_to_app</mat-icon>
+    </button>
+  </mat-toolbar>
+
+  <div class="content">
+    <mat-card>
+      <mat-card-content>
+        <div *ngIf="loading" class="loading-container">
+          <mat-spinner></mat-spinner>
+        </div>
+        
+        <div *ngIf="!loading && !error">
+          <h2 class="welcome-text">Bienvenido, {{ username }}</h2>
+          
+          <div class="account-info">
+            <div class="account-label">Número de Cuenta</div>
+            <div class="account-number">{{ accountNumber }}</div>
+          </div>
+          
+          <div class="balance-info">
+            <div class="balance-label">Saldo Disponible</div>
+            <div class="balance-amount">{{ balance | currency:'EUR':'symbol':'1.2-2' }}</div>
+          </div>
+          
+          <button mat-raised-button color="accent" (click)="loadBalance()" class="refresh-button">
+            <mat-icon>refresh</mat-icon>
+            Actualizar Saldo
+          </button>
+        </div>
+        
+        <div *ngIf="error" class="error-container">
+          <mat-icon color="warn">error</mat-icon>
+          <p>{{ error }}</p>
+          <button mat-raised-button color="primary" (click)="loadBalance()">
+            Reintentar
+          </button>
+        </div>
+      </mat-card-content>
+    </mat-card>
+  </div>
+</div>
