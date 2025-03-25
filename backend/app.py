@@ -26,7 +26,15 @@ def init_db():
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL
+        password TEXT NOT NULL,
+        first_name TEXT,
+        last_name TEXT,
+        address TEXT,
+        email TEXT,
+        phone TEXT,
+        marketing_consent BOOLEAN DEFAULT 0,
+        data_processing_consent BOOLEAN DEFAULT 0,
+        third_party_consent BOOLEAN DEFAULT 0
     )
     ''')
     
@@ -60,10 +68,21 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM users")
     if cursor.fetchone()[0] == 0:
         # Insertar usuarios de ejemplo
-        cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", 
-                      ('usuario1', 'password1'))
-        cursor.execute("INSERT INTO users (username, password) VALUES (?, ?)", 
-                      ('usuario2', 'password2'))
+        cursor.execute("""
+            INSERT INTO users (
+                username, password, first_name, last_name, address, email, phone,
+                marketing_consent, data_processing_consent, third_party_consent
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ('usuario1', 'password1', 'Juan', 'Pérez', 'Calle Principal 123', 
+              'juan@example.com', '555-123-4567', 1, 1, 0))
+        
+        cursor.execute("""
+            INSERT INTO users (
+                username, password, first_name, last_name, address, email, phone,
+                marketing_consent, data_processing_consent, third_party_consent
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ('usuario2', 'password2', 'María', 'García', 'Avenida Central 456', 
+              'maria@example.com', '555-987-6543', 0, 1, 0))
         
         # Insertar cuentas de ejemplo
         cursor.execute("INSERT INTO accounts (user_id, account_number, balance) VALUES (?, ?, ?)", 
@@ -205,6 +224,82 @@ def check_token():
     current_user_id = get_jwt_identity()
     return jsonify({'valid': True, 'user_id': current_user_id}), 200
 
+# Ruta para obtener datos de usuario
+@app.route('/api/user/profile', methods=['GET'])
+@jwt_required()
+def get_user_profile():
+    user_id = get_jwt_identity()
+    
+    conn = sqlite3.connect('claude_bank.db')
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT username, first_name, last_name, address, email, phone,
+               marketing_consent, data_processing_consent, third_party_consent
+        FROM users 
+        WHERE id = ?
+    """, (user_id,))
+    
+    user_data = cursor.fetchone()
+    conn.close()
+    
+    if user_data:
+        return jsonify({
+            'username': user_data[0],
+            'first_name': user_data[1] or '',
+            'last_name': user_data[2] or '',
+            'address': user_data[3] or '',
+            'email': user_data[4] or '',
+            'phone': user_data[5] or '',
+            'marketing_consent': bool(user_data[6]),
+            'data_processing_consent': bool(user_data[7]),
+            'third_party_consent': bool(user_data[8])
+        }), 200
+    else:
+        return jsonify({'message': 'Usuario no encontrado'}), 404
+
+# Ruta para actualizar datos de usuario
+@app.route('/api/user/profile', methods=['PUT'])
+@jwt_required()
+def update_user_profile():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    # Campos permitidos para actualizar
+    allowed_fields = [
+        'first_name', 'last_name', 'address', 'email', 'phone',
+        'marketing_consent', 'data_processing_consent', 'third_party_consent'
+    ]
+    
+    # Filtrar solo los campos permitidos
+    update_data = {k: v for k, v in data.items() if k in allowed_fields}
+    
+    if not update_data:
+        return jsonify({'message': 'No se proporcionaron campos válidos para actualizar'}), 400
+    
+    # Construir la consulta SQL dinámica
+    set_clause = ', '.join([f"{field} = ?" for field in update_data.keys()])
+    values = list(update_data.values())
+    values.append(user_id)  # Para el WHERE id = ?
+    
+    conn = sqlite3.connect('claude_bank.db')
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(f"UPDATE users SET {set_clause} WHERE id = ?", values)
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            return jsonify({'message': 'Perfil actualizado correctamente'}), 200
+        else:
+            return jsonify({'message': 'No se encontró el usuario o no se realizaron cambios'}), 404
+            
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'message': f'Error al actualizar el perfil: {str(e)}'}), 500
+        
+    finally:
+        conn.close()
+
 # Ruta para depuración (sin JWT) - SOLO PARA DESARROLLO
 @app.route('/api/balance-debug/<int:user_id>', methods=['GET'])
 def get_balance_debug(user_id):
@@ -275,6 +370,62 @@ def get_transactions_debug(account_id):
         'per_page': per_page,
         'total_pages': (total + per_page - 1) // per_page
     }), 200
+
+# Ruta para obtener un movimiento específico por ID (para depuración)
+@app.route('/api/transaction-debug/<int:transaction_id>', methods=['GET'])
+def get_transaction_debug(transaction_id):
+    conn = sqlite3.connect('claude_bank.db')
+    cursor = conn.cursor()
+    
+    # Obtener la transacción por ID
+    cursor.execute("""
+        SELECT t.id, t.date, t.concept, t.amount, t.balance_after, t.category, t.is_expense, a.account_number, a.user_id
+        FROM transactions t
+        JOIN accounts a ON t.account_id = a.id
+        WHERE t.id = ?
+    """, (transaction_id,))
+    
+    row = cursor.fetchone()
+    
+    if not row:
+        conn.close()
+        return jsonify({'message': 'Transacción no encontrada'}), 404
+    
+    # Obtener la transacción anterior y siguiente
+    cursor.execute("""
+        SELECT id FROM transactions 
+        WHERE account_id = (SELECT account_id FROM transactions WHERE id = ?)
+        AND date > (SELECT date FROM transactions WHERE id = ?)
+        ORDER BY date ASC LIMIT 1
+    """, (transaction_id, transaction_id))
+    prev_transaction = cursor.fetchone()
+    
+    cursor.execute("""
+        SELECT id FROM transactions 
+        WHERE account_id = (SELECT account_id FROM transactions WHERE id = ?)
+        AND date < (SELECT date FROM transactions WHERE id = ?)
+        ORDER BY date DESC LIMIT 1
+    """, (transaction_id, transaction_id))
+    next_transaction = cursor.fetchone()
+    
+    # Construir el objeto de respuesta
+    transaction = {
+        'id': row[0],
+        'date': row[1],
+        'concept': row[2],
+        'amount': row[3],
+        'balance_after': row[4],
+        'category': row[5],
+        'is_expense': bool(row[6]),
+        'account_number': row[7],
+        'user_id': row[8],
+        'prev_transaction_id': prev_transaction[0] if prev_transaction else None,
+        'next_transaction_id': next_transaction[0] if next_transaction else None
+    }
+    
+    conn.close()
+    
+    return jsonify(transaction), 200
 
 # Ruta para obtener el saldo
 @app.route('/api/balance', methods=['GET'])
