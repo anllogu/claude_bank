@@ -9,6 +9,7 @@ on:
     paths:
       - 'backend/**'
     branches: [ main, develop ]
+  workflow_dispatch:  # Añadido para permitir ejecución manual
 
 jobs:
   python-lint:
